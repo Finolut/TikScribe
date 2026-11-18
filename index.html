@@ -1,0 +1,1352 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TikScribe — Transkrip & Rangkuman TikTok</title>
+<meta name="description" content="Ubah video TikTok jadi transkrip lengkap dan rangkuman. Gratis, tanpa API: Whisper dan Qwen berjalan di GPU perangkat Anda lewat WebGPU." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+<script src="vendor/tailwind.js"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['"Plus Jakarta Sans"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+        },
+        colors: { rose: { brand: '#fe2c55' }, cyan: { brand: '#25f4ee' } },
+        keyframes: {
+          float: { '0%,100%': { transform: 'translateY(0) scale(1)' }, '50%': { transform: 'translateY(-30px) scale(1.05)' } },
+          fadeUp: { '0%': { opacity: 0, transform: 'translateY(12px)' }, '100%': { opacity: 1, transform: 'translateY(0)' } },
+          shimmer: { '0%': { backgroundPosition: '-200% 0' }, '100%': { backgroundPosition: '200% 0' } },
+        },
+        animation: { float: 'float 12s ease-in-out infinite', fadeUp: 'fadeUp .5s ease-out both', shimmer: 'shimmer 1.6s linear infinite' },
+      },
+    },
+  };
+</script>
+<style>
+  body { background: #07070c; }
+  .glass { background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+  .grad-text { background: linear-gradient(90deg,#25f4ee 0%,#ffffff 45%,#fe2c55 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .grad-border { position: relative; }
+  .grad-border::before { content: ""; position: absolute; inset: 0; padding: 1px; border-radius: inherit; background: linear-gradient(120deg,rgba(37,244,238,.7),rgba(255,255,255,.08) 40%,rgba(254,44,85,.7)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; }
+  .grid-bg { background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px); background-size: 48px 48px; mask-image: radial-gradient(ellipse at top, #000 30%, transparent 75%); }
+  .scroll-thin::-webkit-scrollbar { width: 6px; } .scroll-thin::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 9px; }
+  .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(255,255,255,.15); border-top-color: #25f4ee; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  mark { background: rgba(254,44,85,.35); color: #fff; border-radius: 3px; padding: 0 2px; }
+  .indet { background: linear-gradient(90deg, transparent, #25f4ee, #fe2c55, transparent); background-size: 200% 100%; }
+  .caret::after { content: "▍"; color: #25f4ee; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+</style>
+</head>
+<body class="min-h-screen font-sans text-slate-200 antialiased selection:bg-rose-brand/40">
+
+<!-- Background -->
+<div class="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+  <div class="grid-bg absolute inset-0"></div>
+  <div class="absolute -top-40 -left-32 h-[28rem] w-[28rem] rounded-full bg-cyan-brand/20 blur-[120px] animate-float"></div>
+  <div class="absolute top-20 -right-32 h-[30rem] w-[30rem] rounded-full bg-rose-brand/20 blur-[120px] animate-float" style="animation-delay:-6s"></div>
+</div>
+
+<!-- Navbar -->
+<header class="mx-auto flex max-w-6xl items-center justify-between px-4 py-5 sm:px-5">
+  <a href="#" class="flex items-center gap-2.5">
+    <span class="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-cyan-brand to-rose-brand shadow-lg shadow-rose-brand/20">
+      <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h10M4 18h7"/><circle cx="18" cy="16" r="3"/></svg>
+    </span>
+    <span class="text-lg font-extrabold tracking-tight text-white">Tik<span class="text-cyan-brand">Scribe</span></span>
+  </a>
+  <div class="flex items-center gap-2">
+    <span id="deviceBadge" class="hidden max-w-[260px] items-center gap-1.5 truncate rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium text-slate-300 sm:inline-flex"></span>
+    <button id="openSettings" class="glass flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-white/10" aria-label="Pengaturan bahasa">
+      <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 5h12M9 3v2m1.05 9.5A18 18 0 0 1 6.4 9m6.1 9 4.5-10 4.5 10m-7.6-2.5h6.2M11 5c-1 5.5-4.5 10-8 12"/></svg>
+      <span class="hidden sm:inline">Bahasa</span>
+    </button>
+  </div>
+</header>
+
+<main class="mx-auto max-w-6xl px-4 pb-24 sm:px-5">
+
+  <!-- Hero -->
+  <section class="mx-auto max-w-3xl pt-10 text-center sm:pt-16">
+    <span class="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-300">
+      <span class="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_10px_#6ee7b7]"></span>
+      100% gratis · Tanpa API · AI jalan di GPU Anda
+    </span>
+    <h1 class="mt-5 text-4xl font-extrabold leading-[1.1] tracking-tight text-white sm:text-6xl">
+      Video TikTok jadi <span class="grad-text">rangkuman</span> dalam sekali klik
+    </h1>
+    <p class="mx-auto mt-5 max-w-xl text-base text-slate-400 sm:text-lg">
+      Tempel link video. TikScribe menuliskan semua ucapannya dengan Whisper, lalu Qwen merangkum isinya. Keduanya berjalan di GPU perangkat Anda, tanpa server AI.
+    </p>
+
+    <!-- Input -->
+    <form id="form" class="grad-border glass mx-auto mt-10 flex flex-col gap-2 rounded-2xl p-2 shadow-2xl shadow-black/40 sm:flex-row">
+      <div class="flex flex-1 items-center gap-3 px-3">
+        <svg class="h-5 w-5 shrink-0 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.2 10.8a4 4 0 0 0-5.6 0l-3 3a4 4 0 0 0 5.6 5.6l1.4-1.4m-.8-6.8 1.4-1.4a4 4 0 0 1 5.6 5.6l-3 3a4 4 0 0 1-5.6 0"/></svg>
+        <input id="url" type="url" autocomplete="off" placeholder="https://www.tiktok.com/@user/video/123..." class="w-full min-w-0 bg-transparent py-3 text-[15px] text-white placeholder-slate-500 outline-none" />
+        <button type="button" id="pasteBtn" class="hidden shrink-0 rounded-lg px-2.5 py-1 text-xs font-semibold text-slate-400 transition hover:bg-white/10 hover:text-white sm:block">Tempel</button>
+      </div>
+      <button id="submitBtn" type="submit" class="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-rose-brand to-[#ff5c7c] px-6 py-3 text-sm font-bold text-white shadow-lg shadow-rose-brand/30 transition hover:brightness-110 active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-60">
+        <span id="submitLabel">Transkrip Sekarang</span>
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14m-6-6 6 6-6 6"/></svg>
+      </button>
+    </form>
+    <p class="mt-4 text-sm text-slate-500">
+      Punya filenya? <button id="uploadLink" class="font-semibold text-cyan-brand underline-offset-4 hover:underline">Unggah video/audio langsung</button>
+      <input id="fileInput" type="file" accept="video/*,audio/*" class="hidden" />
+    </p>
+    <p id="firstRunNote" class="mx-auto mt-2 max-w-lg text-xs text-slate-600"></p>
+  </section>
+
+  <!-- Progress -->
+  <section id="progress" class="mx-auto mt-12 hidden max-w-4xl animate-fadeUp">
+    <div class="glass rounded-2xl p-5">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-sm font-bold uppercase tracking-wider text-slate-400">Proses</h2>
+        <span id="elapsed" class="font-mono text-xs text-slate-500">0.0s</span>
+      </div>
+      <ol id="steps" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"></ol>
+      <div id="liveWrap" class="mt-4 hidden">
+        <div class="mb-1.5 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500"><span class="h-1.5 w-1.5 animate-pulse rounded-full bg-rose-brand"></span><span id="liveLabel">Transkrip langsung</span></div>
+        <div id="liveBox" class="scroll-thin max-h-48 overflow-y-auto whitespace-pre-line rounded-xl border border-white/10 bg-black/30 p-3 text-left text-sm leading-relaxed text-slate-300"></div>
+      </div>
+      <div id="errorBox" class="mt-4 hidden rounded-xl border border-rose-brand/30 bg-rose-brand/10 p-4 text-left text-sm text-rose-100"></div>
+    </div>
+  </section>
+
+  <!-- Result -->
+  <section id="result" class="mt-10 hidden animate-fadeUp">
+    <div class="grid gap-6 lg:grid-cols-[320px_1fr]">
+      <aside id="videoCard" class="glass h-fit overflow-hidden rounded-2xl lg:sticky lg:top-6"></aside>
+
+      <div class="glass min-w-0 rounded-2xl">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 pt-4 sm:px-6">
+          <div class="flex gap-1" role="tablist">
+            <button data-tab="summary" class="tab-btn rounded-t-lg border-b-2 px-4 py-2.5 text-sm font-semibold transition">Rangkuman</button>
+            <button data-tab="transcript" class="tab-btn rounded-t-lg border-b-2 px-4 py-2.5 text-sm font-semibold transition">Transkrip lengkap</button>
+          </div>
+          <div class="flex gap-2 pb-3">
+            <button id="copyBtn" class="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/10">
+              <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> Salin
+            </button>
+            <button id="downloadBtn" class="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/10">
+              <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0-4-4m4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg> Unduh .txt
+            </button>
+          </div>
+        </div>
+        <div id="panel-summary" class="tab-panel p-5 sm:p-7"></div>
+        <div id="panel-transcript" class="tab-panel hidden p-5 sm:p-7">
+          <div class="mb-4 flex flex-col gap-2 sm:flex-row">
+            <div class="flex flex-1 items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3">
+              <svg class="h-4 w-4 shrink-0 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path stroke-linecap="round" d="m20 20-3.5-3.5"/></svg>
+              <input id="searchTr" placeholder="Cari kata di transkrip…" class="w-full min-w-0 bg-transparent py-2.5 text-sm text-white placeholder-slate-500 outline-none" />
+              <span id="matchCount" class="shrink-0 text-xs text-slate-500"></span>
+            </div>
+            <div class="flex shrink-0 rounded-xl border border-white/10 bg-black/20 p-1 text-xs font-semibold">
+              <button data-view="para" class="view-btn rounded-lg px-3 py-1.5 transition">Paragraf</button>
+              <button data-view="time" class="view-btn rounded-lg px-3 py-1.5 transition">Per waktu</button>
+            </div>
+          </div>
+          <div id="transcriptList"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- History -->
+  <section id="historySection" class="mt-20 hidden">
+    <div class="mb-5 flex items-end justify-between">
+      <div>
+        <h2 class="text-xl font-bold text-white">Riwayat</h2>
+        <p class="text-sm text-slate-500">Tersimpan di browser ini saja.</p>
+      </div>
+      <button id="clearHistory" class="text-xs font-semibold text-slate-500 transition hover:text-rose-brand">Hapus semua</button>
+    </div>
+    <div id="historyGrid" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"></div>
+  </section>
+
+  <!-- How it works -->
+  <section class="mx-auto mt-20 grid max-w-4xl gap-4 sm:grid-cols-3">
+    <div class="glass rounded-2xl p-5">
+      <div class="mb-3 grid h-10 w-10 place-items-center rounded-xl bg-cyan-brand/10 font-mono text-sm font-bold text-cyan-brand">01</div>
+      <h3 class="font-bold text-white">Tempel link</h3>
+      <p class="mt-1 text-sm text-slate-400">Salin dari tombol Bagikan di TikTok, termasuk link pendek vt.tiktok.com.</p>
+    </div>
+    <div class="glass rounded-2xl p-5">
+      <div class="mb-3 grid h-10 w-10 place-items-center rounded-xl bg-white/10 font-mono text-sm font-bold text-white">02</div>
+      <h3 class="font-bold text-white">Whisper Turbo di GPU</h3>
+      <p class="mt-1 text-sm text-slate-400">Model suara OpenAI menuliskan setiap ucapan lewat WebGPU. Audio tidak dikirim ke server AI mana pun.</p>
+    </div>
+    <div class="glass rounded-2xl p-5">
+      <div class="mb-3 grid h-10 w-10 place-items-center rounded-xl bg-rose-brand/10 font-mono text-sm font-bold text-rose-brand">03</div>
+      <h3 class="font-bold text-white">Qwen merangkum</h3>
+      <p class="mt-1 text-sm text-slate-400">Model bahasa Qwen3.5 di browser menulis ringkasan dan semua poin penting, termasuk setiap butir daftar.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="border-t border-white/5 px-4 py-8 text-center text-xs text-slate-600">
+  TikScribe · Whisper large-v3-turbo via Transformers.js · Qwen3.5 2B via WebLLM · Tidak berafiliasi dengan TikTok.
+</footer>
+
+<!-- Settings modal -->
+<div id="settingsModal" class="fixed inset-0 z-50 hidden items-center justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm">
+  <div class="grad-border my-8 w-full max-w-lg rounded-2xl bg-[#0e0e16] p-6 shadow-2xl animate-fadeUp">
+    <div class="mb-5 flex items-center justify-between">
+      <h2 class="text-lg font-bold text-white">Bahasa</h2>
+      <button data-close class="rounded-lg p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white" aria-label="Tutup">
+        <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+    <div class="space-y-5">
+      <div>
+        <label for="asrLang" class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Bahasa di video</label>
+        <select id="asrLang" class="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-brand/60">
+          <option value="indonesian">Bahasa Indonesia</option>
+          <option value="english">English</option>
+          <option value="malay">Bahasa Melayu</option>
+          <option value="javanese">Jawa</option>
+          <option value="sundanese">Sunda</option>
+          <option value="">Deteksi otomatis</option>
+        </select>
+      </div>
+      <div>
+        <label for="sumLang" class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Bahasa rangkuman</label>
+        <select id="sumLang" class="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-brand/60">
+          <option value="Bahasa Indonesia">Bahasa Indonesia</option>
+          <option value="English">English</option>
+        </select>
+      </div>
+      <details class="rounded-xl border border-white/10 bg-black/20 p-3">
+        <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wider text-slate-400">Lanjutan · CORS proxy</summary>
+        <p class="mt-2 text-xs text-slate-500">Dipakai hanya jika unduhan video diblokir browser. Gunakan <code class="text-slate-300">{url}</code> sebagai tempat link. Kosongkan untuk menonaktifkan.</p>
+        <input id="proxy" class="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 font-mono text-xs text-white outline-none focus:border-cyan-brand/60" placeholder="https://proxy-anda.workers.dev/?url={url}" />
+      </details>
+    </div>
+    <div class="mt-6 flex justify-end gap-2">
+      <button data-close class="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-300 transition hover:bg-white/10">Batal</button>
+      <button id="saveSettings" class="rounded-xl bg-gradient-to-r from-cyan-brand to-[#7af9f5] px-5 py-2.5 text-sm font-bold text-slate-900 transition hover:brightness-110">Simpan</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="pointer-events-none fixed bottom-6 left-1/2 z-[60] max-w-[90vw] -translate-x-1/2 translate-y-4 rounded-xl border border-white/10 bg-[#14141f] px-4 py-2.5 text-center text-sm font-medium text-white opacity-0 shadow-xl transition-all duration-300"></div>
+
+<!-- Whisper worker: runs on its own thread so the page stays smooth -->
+<script type="text/worker" id="asrWorkerSrc">
+import { pipeline, env } from '__BASE__vendor/transformers.web.min.js';
+env.backends.onnx.wasm.wasmPaths = '__BASE__vendor/';
+if ('__LOCAL__' === '1') {
+  // Models live in the project folder: read them from disk, never download or copy them into browser storage.
+  env.allowLocalModels = true; env.allowRemoteModels = false;
+  env.localModelPath = '__BASE__models/'; env.useBrowserCache = false;
+} else {
+  env.allowLocalModels = false;
+}
+let asr = null, loading = null;
+const post = m => self.postMessage(m);
+// Receives every generated token. Broken GPU math (seen in Firefox's WebGPU) makes Whisper repeat the
+// same one or two tokens forever; abort that instead of spinning for minutes.
+class LoopGuard {
+  constructor() { this.ids = []; }
+  put(v) {
+    const arr = (v && v.tolist ? v.tolist() : v).flat(Infinity).map(Number);
+    this.ids.push(...arr);
+    if (this.ids.length > 40 && new Set(this.ids.slice(-32)).size <= 4) { const e = new Error('Whisper loop'); e.loop = true; throw e; }
+  }
+  end() {}
+}
+async function create(cfg) {
+  // Big model files sometimes drop mid-download; finished files are cached, so a retry only fetches what is missing.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await pipeline('automatic-speech-recognition', cfg.model, {
+        device: cfg.device, dtype: cfg.dtype,
+        progress_callback: p => { if (p.status === 'progress') post({ kind: 'progress', file: p.file, loaded: p.loaded, total: p.total }); },
+      });
+    } catch (e) {
+      if (attempt >= 3 || !/fetch|network|protocol|load/i.test(String(e && e.message))) throw e;
+      post({ kind: 'retry', attempt });
+      await new Promise(r => setTimeout(r, 1500 * attempt));
+    }
+  }
+}
+function load(cfg) {
+  if (asr) return Promise.resolve(asr);
+  if (!loading) loading = create(cfg).then(p => { asr = p; return p; }).catch(e => { loading = null; throw e; });
+  return loading;
+}
+self.onmessage = async e => {
+  const { id, type, cfg, chunks, language } = e.data;
+  try {
+    if (type === 'load') { await load(cfg); post({ id, kind: 'ready' }); return; }
+    if (type === 'unload') { const p = asr; asr = null; loading = null; if (p && p.dispose) await p.dispose(); post({ id, kind: 'done' }); return; }
+    const p = await load(cfg);
+    post({ id, kind: 'running' });
+    // Each chunk is <= 30 s (cut at a pause), so Whisper hears it in a single window: nothing gets skipped at seams.
+    for (let i = 0; i < chunks.length; i++) {
+      // Fast speech is ~9 tokens/s, so this budget never cuts real speech but stops runaway output early.
+      const budget = Math.min(440, Math.ceil(chunks[i].length / 16000 * 10) + 24);
+      const guard = new LoopGuard();
+      const opts = { task: 'transcribe', return_timestamps: false, max_new_tokens: budget, streamer: guard };
+      if (language) opts.language = language;
+      try {
+        const out = await p(chunks[i], opts);
+        post({ id, kind: 'chunk', index: i, text: (out && out.text) || '' });
+      } catch (err) {
+        if (!(err && err.loop)) throw err;
+        post({ id, kind: 'chunk', index: i, text: '', degenerate: true });
+      }
+    }
+    post({ id, kind: 'done' });
+  } catch (err) {
+    post({ id, kind: 'error', message: (err && err.message) || String(err) });
+  }
+};
+</script>
+
+<!-- WebLLM worker: hosts the Qwen model on its own thread -->
+<script type="text/worker" id="llmWorkerSrc">
+import { WebWorkerMLCEngineHandler } from '__BASE__vendor/web-llm.js';
+if ('__LOCAL__' === '1') {
+  // WebLLM always copies weights into Cache Storage (a second 1.3 GB on the disk). The files are already
+  // in the project folder, so hand WebLLM a pass-through "cache" that streams them from disk on demand.
+  const realOpen = caches.open.bind(caches);
+  const lazy = url => {
+    // Nothing is read until WebLLM actually consumes the body; then the whole file comes in one piece.
+    return new Response(new ReadableStream({
+      async pull(ctrl) {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error('File model tidak ada: ' + url);
+        ctrl.enqueue(new Uint8Array(await r.arrayBuffer()));
+        ctrl.close();
+      },
+    }, { highWaterMark: 0 }));
+  };
+  const passthrough = { match: async req => lazy(typeof req === 'string' ? req : req.url), add: async () => {}, addAll: async () => {}, put: async () => {}, delete: async () => true, keys: async () => [] };
+  caches.open = async scope => (String(scope).startsWith('webllm/') ? passthrough : realOpen(scope));
+}
+const handler = new WebWorkerMLCEngineHandler();
+self.onmessage = msg => handler.onmessage(msg);
+</script>
+
+<script>
+(() => {
+  'use strict';
+
+  /* ---------- Config: one transcription model, one summary model ---------- */
+  const BASE = new URL('./', location.href).href;
+  const WEBLLM_URL = BASE + 'vendor/web-llm.js';
+  const ASR_GPU = { model: 'whisper-large-v3-turbo', remote: 'onnx-community/whisper-large-v3-turbo', name: 'Whisper Turbo', size: '±1,5 GB' };
+  const ASR_CPU = { model: 'whisper-base', remote: 'onnx-community/whisper-base', name: 'Whisper Base (CPU)', size: '±130 MB', device: 'wasm', dtype: { encoder_model: 'fp32', decoder_model_merged: 'q8' } };
+  // models/ in the project folder is used when present; otherwise (e.g. a plain web host) fall back to Hugging Face.
+  let localModels = false;
+  const localReady = fetch(BASE + 'models/whisper-large-v3-turbo/config.json', { method: 'HEAD', cache: 'no-store' })
+    .then(r => { localModels = r.ok; }).catch(() => { localModels = false; });
+  const workerSrc = id => URL.createObjectURL(new Blob([$(id).textContent.replaceAll('__BASE__', BASE).replaceAll('__LOCAL__', localModels ? '1' : '0')], { type: 'text/javascript' }));
+  const LLM = { id: 'Qwen3.5-2B-q4f16_1-MLC', lib: 'Qwen3.5-2B-q4f16_1_cs1k-webgpu.wasm', name: 'Qwen3.5 2B', size: '±1,3 GB' };
+  LLM.noThink = /^Qwen3/i.test(LLM.id);
+  const MIN_WORDS = 8;
+  const IS_FIREFOX = /Firefox\//.test(navigator.userAgent);
+  let forceCPU = false;
+  const LS_SETTINGS = 'tikscribe.settings.v3';
+  const LS_HISTORY = 'tikscribe.free.history.v1';
+
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const store = {
+    get(k, fb) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  };
+
+  let settings = Object.assign({ asrLang: 'indonesian', sumLang: 'Bahasa Indonesia', proxy: '' }, store.get(LS_SETTINGS, {}));
+  let gpu = { ok: false, f16: false, name: '' };
+  let current = null, lastMeta = null, busy = false, view = 'para';
+  const gpuReady = detectGPU();
+
+  /* ---------- Helpers ---------- */
+  const esc = (s = '') => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmtTime = (sec = 0) => { sec = Math.max(0, Math.floor(Number(sec) || 0)); const m = Math.floor(sec / 60), s = sec % 60; return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`; };
+  const compact = n => (n == null ? '–' : new Intl.NumberFormat('id-ID', { notation: 'compact', maximumFractionDigits: 1 }).format(n));
+  const fmtMB = b => (b / 1024 / 1024).toFixed(b > 100 * 1024 * 1024 ? 0 : 1) + ' MB';
+  const countWords = t => ((Array.isArray(t) ? t.map(s => s.text).join(' ') : t || '').match(/[\p{L}\p{N}]+/gu) || []).length;
+  const fullText = r => (r.transcript || []).map(s => s.text).join(' ').replace(/\s+/g, ' ').trim();
+  const secs = t0 => ((performance.now() - t0) / 1000).toFixed(1) + 's';
+
+  function toast(msg, ms = 2600) {
+    const t = $('#toast'); t.textContent = msg;
+    t.classList.remove('opacity-0', 'translate-y-4');
+    clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('opacity-0', 'translate-y-4'), ms);
+  }
+
+  async function fetchSmart(url) {
+    try {
+      const r = await fetch(url);
+      if (r.ok || !settings.proxy) return r;
+    } catch (e) {
+      if (!settings.proxy) throw new Error('Diblokir oleh browser (CORS). Isi CORS proxy di menu Bahasa → Lanjutan, atau unduh videonya lalu unggah manual.');
+    }
+    const p = settings.proxy.includes('{url}') ? settings.proxy.replace('{url}', encodeURIComponent(url)) : settings.proxy + encodeURIComponent(url);
+    return fetch(p);
+  }
+
+  async function detectGPU() {
+    if (IS_FIREFOX) { gpu = { ok: false, f16: false, name: '', reason: 'firefox' }; return gpu; }
+    try {
+      const adapter = navigator.gpu && await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+      if (adapter) {
+        const info = adapter.info || (adapter.requestAdapterInfo ? await adapter.requestAdapterInfo() : {});
+        gpu = { ok: true, f16: adapter.features.has('shader-f16'), name: info.description || info.device || info.vendor || 'GPU' };
+      }
+    } catch { gpu.ok = false; }
+    return gpu;
+  }
+  // fp16 encoder is ~3.5x faster on WebGPU than a 4-bit one; GPUs without fp16 get the smaller 4-bit files.
+  // Whisper Turbo needs WebGPU with fp16 shaders (all recent NVIDIA/AMD/Intel GPUs); anything else uses Whisper Base on the CPU.
+  const useTurbo = () => gpu.ok && gpu.f16 && !forceCPU;
+  const asrCfg = () => {
+    const m = useTurbo() ? ASR_GPU : ASR_CPU;
+    return useTurbo()
+      ? { model: localModels ? m.model : m.remote, device: 'webgpu', dtype: { encoder_model: 'fp16', decoder_model_merged: 'q4f16' } }
+      : { model: localModels ? m.model : m.remote, device: m.device, dtype: m.dtype };
+  };
+  const asrName = () => (useTurbo() ? ASR_GPU.name : ASR_CPU.name);
+
+  /* ---------- Steps UI ---------- */
+  const STEPS = [
+    { id: 'info', label: 'Info video' },
+    { id: 'audio', label: 'Ekstrak audio' },
+    { id: 'stt', label: 'Transkripsi' },
+    { id: 'sum', label: 'Rangkuman' },
+  ];
+  const stepState = {};
+  let timer = null;
+  function initSteps() {
+    $('#steps').innerHTML = STEPS.map((s, i) => `
+      <li data-step="${s.id}" class="flex items-center gap-3 rounded-xl border border-white/5 bg-black/20 px-3 py-3 transition">
+        <span class="step-icon grid h-7 w-7 shrink-0 place-items-center rounded-full bg-white/5 font-mono text-xs text-slate-500">${i + 1}</span>
+        <span class="min-w-0 flex-1">
+          <span class="step-title block text-sm font-semibold text-slate-400">${s.label}</span>
+          <span class="step-sub block truncate text-[11px] text-slate-600">Menunggu</span>
+          <span class="step-bar mt-1.5 hidden h-1 w-full overflow-hidden rounded-full bg-white/5"><span class="block h-full w-0 rounded-full bg-gradient-to-r from-cyan-brand to-rose-brand transition-all duration-300"></span></span>
+        </span>
+      </li>`).join('');
+    STEPS.forEach(s => { stepState[s.id] = 'wait'; });
+    $('#errorBox').classList.add('hidden');
+    $('#liveWrap').classList.add('hidden'); $('#liveBox').textContent = '';
+    $('#progress').classList.remove('hidden');
+    const t0 = performance.now();
+    clearInterval(timer);
+    timer = setInterval(() => { $('#elapsed').textContent = ((performance.now() - t0) / 1000).toFixed(1) + 's'; }, 100);
+  }
+  function setStep(id, state, sub) {
+    const li = $(`[data-step="${id}"]`); if (!li) return;
+    stepState[id] = state;
+    li.className = 'flex items-center gap-3 rounded-xl border px-3 py-3 transition ' + ({
+      active: 'border-cyan-brand/40 bg-cyan-brand/5', done: 'border-white/10 bg-white/[.03]', error: 'border-rose-brand/40 bg-rose-brand/10', skip: 'border-white/5 bg-black/20 opacity-50', warn: 'border-amber-400/40 bg-amber-400/10',
+    }[state] || 'border-white/5 bg-black/20');
+    const icons = {
+      active: '<span class="step-icon spinner shrink-0"></span>',
+      done: '<span class="step-icon grid h-7 w-7 shrink-0 place-items-center rounded-full bg-cyan-brand/15 text-cyan-brand"><svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m5 13 4 4L19 7"/></svg></span>',
+      error: '<span class="step-icon grid h-7 w-7 shrink-0 place-items-center rounded-full bg-rose-brand/20 font-bold text-rose-brand">!</span>',
+      warn: '<span class="step-icon grid h-7 w-7 shrink-0 place-items-center rounded-full bg-amber-400/20 font-bold text-amber-300">!</span>',
+      skip: '<span class="step-icon grid h-7 w-7 shrink-0 place-items-center rounded-full bg-white/5 text-slate-500">–</span>',
+    };
+    if (icons[state]) $('.step-icon', li).outerHTML = icons[state];
+    $('.step-title', li).className = 'step-title block text-sm font-semibold ' + (state === 'active' || state === 'done' ? 'text-white' : state === 'warn' ? 'text-amber-200' : 'text-slate-400');
+    $('.step-sub', li).textContent = sub || ({ active: 'Memproses…', done: 'Selesai', error: 'Gagal', skip: 'Dilewati', warn: 'Perlu dicek' }[state] || '');
+    if (state !== 'active') setBar(id, null);
+  }
+  const setSub = (id, text) => { const el = $(`[data-step="${id}"] .step-sub`); if (el) el.textContent = text; };
+  function setBar(id, pct) {
+    const bar = $(`[data-step="${id}"] .step-bar`); if (!bar) return;
+    const fill = bar.firstElementChild;
+    if (pct === null) { bar.classList.add('hidden'); return; }
+    bar.classList.remove('hidden');
+    if (pct === 'indeterminate') { fill.style.width = '100%'; fill.className = 'block h-full w-full rounded-full indet animate-shimmer'; }
+    else { fill.className = 'block h-full rounded-full bg-gradient-to-r from-cyan-brand to-rose-brand transition-all duration-300'; fill.style.width = Math.max(2, Math.min(100, pct)) + '%'; }
+  }
+  function showLive(label, html) {
+    $('#liveLabel').textContent = label;
+    $('#liveWrap').classList.remove('hidden');
+    $('#liveBox').innerHTML = html;
+    $('#liveBox').scrollTop = 1e9;
+  }
+  function showError(err, allowUpload) {
+    clearInterval(timer);
+    const box = $('#errorBox');
+    box.innerHTML = `<p class="font-semibold">Terjadi kesalahan</p><p class="mt-1 text-rose-100/80">${esc(err.message || err)}</p>` +
+      (allowUpload ? `<div class="mt-3 flex flex-wrap items-center gap-2"><button id="errUpload" class="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20">Unggah file video manual</button>
+        <span class="text-xs text-rose-100/60">Simpan videonya dari TikTok dulu, lalu unggah di sini.</span></div>` : '');
+    box.classList.remove('hidden');
+    $('#errUpload')?.addEventListener('click', () => $('#fileInput').click());
+  }
+
+  /* ---------- 1. TikTok info & media (tikwm: publik, gratis, tanpa key) ---------- */
+  async function fetchMeta(url) {
+    const r = await fetchSmart('https://www.tikwm.com/api/?hd=0&url=' + encodeURIComponent(url));
+    if (!r.ok) throw new Error(`Server info video menolak (HTTP ${r.status}). Coba lagi sebentar lagi.`);
+    const j = await r.json();
+    if (j.code !== 0 || !j.data) throw new Error(j.msg || 'Video tidak ditemukan. Pastikan link publik dan benar.');
+    const d = j.data;
+    const abs = u => (!u ? '' : /^https?:/.test(u) ? u : 'https://www.tikwm.com' + u);
+    return {
+      id: d.id, url, title: d.title || '', duration: d.duration || 0,
+      cover: abs(d.origin_cover || d.cover), play: abs(d.play), music: abs(d.music),
+      isSlideshow: Array.isArray(d.images) && d.images.length > 0,
+      author: { name: d.author?.nickname || '', handle: d.author?.unique_id || '', avatar: abs(d.author?.avatar) },
+      stats: { plays: d.play_count, likes: d.digg_count, comments: d.comment_count, shares: d.share_count },
+    };
+  }
+
+  async function downloadMedia(meta) {
+    const src = meta.isSlideshow ? meta.music : meta.play;
+    if (!src) throw new Error('Link media tidak tersedia untuk video ini.');
+    const r = await fetchSmart(src);
+    if (!r.ok) throw new Error(`Gagal mengunduh video (HTTP ${r.status}).`);
+    const total = +r.headers.get('content-length') || 0;
+    if (!r.body || !total) return r.blob();
+    const reader = r.body.getReader(); const parts = []; let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read(); if (done) break;
+      parts.push(value); got += value.length;
+      setBar('audio', (got / total) * 100); setSub('audio', `Mengunduh ${fmtMB(got)} / ${fmtMB(total)}`);
+    }
+    return new Blob(parts, { type: r.headers.get('content-type') || 'video/mp4' });
+  }
+
+  /* ---------- 2. Audio → 16 kHz mono, normalised, cut into ≤29 s pieces at real pauses ---------- */
+  const RATE = 16000;
+  async function decodeAudio(blob) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC();
+    let decoded;
+    try { decoded = await ctx.decodeAudioData(await blob.arrayBuffer()); }
+    catch { throw new Error('Audio tidak bisa dibaca dari file ini. Coba file MP4/MP3 lain.'); }
+    finally { ctx.close?.(); }
+    const off = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * RATE)), RATE);
+    const node = off.createBufferSource(); node.buffer = decoded; node.connect(off.destination); node.start();
+    const pcm = (await off.startRendering()).getChannelData(0);
+    let peak = 0; for (let i = 0; i < pcm.length; i++) { const a = Math.abs(pcm[i]); if (a > peak) peak = a; }
+    if (peak > 0 && peak < 0.9) { const g = Math.min(10, 0.95 / peak); for (let i = 0; i < pcm.length; i++) pcm[i] *= g; }
+    return { pcm, duration: decoded.duration };
+  }
+
+  function segmentAudio(pcm) {
+    const F = RATE / 20; // 50 ms frames
+    const nF = Math.ceil(pcm.length / F), energy = new Float32Array(nF);
+    for (let f = 0; f < nF; f++) { let s = 0; const a = f * F, b = Math.min(pcm.length, a + F); for (let i = a; i < b; i++) s += pcm[i] * pcm[i]; energy[f] = s / Math.max(1, b - a); }
+    // Smooth over ~400 ms so we cut inside a real pause, never in the middle of a word.
+    const W = 4, smooth = new Float32Array(nF);
+    for (let f = 0; f < nF; f++) { let s = 0, n = 0; for (let k = Math.max(0, f - W); k <= Math.min(nF - 1, f + W); k++) { s += energy[k]; n++; } smooth[f] = s / n; }
+    const MAX = 29 * RATE, MIN = 15 * RATE;
+    const cuts = []; let start = 0;
+    while (start < pcm.length) {
+      if (pcm.length - start <= MAX) { cuts.push([start, pcm.length]); break; }
+      const lo = Math.floor((start + MIN) / F), hi = Math.floor((start + MAX) / F);
+      let best = hi, bestE = Infinity;
+      // Prefer later pauses slightly so pieces stay long (fewer seams).
+      for (let f = lo; f < hi; f++) { const e = smooth[f] * (1 + 0.15 * (hi - f) / (hi - lo)); if (e < bestE) { bestE = e; best = f; } }
+      const cut = best * F + F / 2;
+      cuts.push([start, cut]); start = cut;
+    }
+    return cuts.map(([a, b]) => makePiece(pcm, a, b, smooth, F)).filter(c => c.end - c.start > 0.3);
+  }
+  function makePiece(pcm, a, b, smooth, F) {
+    const data = pcm.slice(a, b);
+    let s = 0; for (let i = 0; i < data.length; i++) s += data[i] * data[i];
+    let voiced = 0; for (let f = Math.floor(a / F); f < Math.min(smooth.length, Math.floor(b / F)); f++) if (smooth[f] > 4e-4) voiced++;
+    return { start: a / RATE, end: b / RATE, data, rms: Math.sqrt(s / Math.max(1, data.length)), voiced: voiced * F / RATE, a, b, smooth, F };
+  }
+  // Split one piece at its quietest moment between 35% and 65% of its length.
+  function splitPiece(pcm, p) {
+    const { a, b, smooth, F } = p;
+    const lo = Math.floor((a + (b - a) * 0.35) / F), hi = Math.floor((a + (b - a) * 0.65) / F);
+    let best = lo, bestE = Infinity;
+    for (let f = lo; f < hi; f++) if (smooth[f] < bestE) { bestE = smooth[f]; best = f; }
+    const cut = best * F + F / 2;
+    return [makePiece(pcm, a, cut, smooth, F), makePiece(pcm, cut, b, smooth, F)];
+  }
+
+  // Only strip things Whisper invents in silence/music; real speech is kept word for word.
+  const JUNK = [
+    /\[[^\]]*\]/g, /\((?:[^)]*?)(musik|music|tepuk|applause|tertawa|laugh|suara|sound|instrumental)(?:[^)]*?)\)/gi, /[♪♫🎵🎶]+/g,
+    /(sub(title)?s?|teks|terjemahan)\s+(by|oleh)\s+[^.]*\.?/gi, /amara\.org[^.]*\.?/gi,
+  ];
+  const HALLU_ONLY = /^(terima kasih|makasih|thank you|thanks)[\s\w]{0,30}[.!]*$/i;
+  function cleanText(t, rms) {
+    JUNK.forEach(r => { t = t.replace(r, ' '); });
+    t = t.replace(/\s+/g, ' ').trim();
+    t = t.replace(/(\b[\p{L}\p{N}][^.!?]{3,60}?)(?:[\s,.]+\1\b){3,}/giu, '$1'); // collapse Whisper looping
+    if (rms < 0.01 && HALLU_ONLY.test(t)) return '';
+    return /[\p{L}\p{N}]/u.test(t) ? t : '';
+  }
+  function toSegments(text, start, end) {
+    // "2. Kenapa…" is a list number that starts a sentence, not a full stop: protect it before splitting.
+    const safe = text.replace(/(^|[\s(])(\d{1,2})\.(?=\s)/g, '$1$2․');
+    const parts = (safe.match(/[^.!?]+[.!?]+["')]*|[^.!?]+$/g) || [safe]).map(s => s.trim().replace(/․/g, '.')).filter(Boolean);
+    const merged = [];
+    parts.forEach(p => { if (merged.length && p.split(' ').length < 3) merged[merged.length - 1] += ' ' + p; else merged.push(p); });
+    let off = 0;
+    return merged.map(p => {
+      const pos = Math.max(0, text.indexOf(p, off)); off = pos + p.length;
+      return { start: start + (pos / Math.max(1, text.length)) * (end - start), text: p };
+    });
+  }
+
+  /* ---------- 3. Whisper in a Web Worker ---------- */
+  const ASR = {
+    w: null, seq: 0, handlers: new Map(), files: {}, ready: null,
+    worker() {
+      if (!this.w) {
+        this.w = new Worker(workerSrc('#asrWorkerSrc'), { type: 'module' });
+        this.w.onmessage = e => {
+          const d = e.data;
+          if (d.kind === 'progress') {
+            this.files[d.file] = { l: d.loaded, t: d.total };
+            let L = 0, T = 0; Object.values(this.files).forEach(f => { L += f.l; T += f.t; });
+            this.onProgress?.(L, T);
+            return;
+          }
+          this.handlers.get(d.id)?.(d);
+        };
+        this.w.onerror = e => {
+          e.preventDefault?.();
+          const err = new Error(e.message || 'Gagal memuat mesin Whisper. Periksa koneksi internet lalu coba lagi.');
+          this.handlers.forEach(h => h({ kind: 'error', message: err.message }));
+          this.reset();
+        };
+      }
+      return this.w;
+    },
+    reset(reason) {
+      try { this.w?.terminate(); } catch {}
+      const pending = [...this.handlers.values()];
+      this.w = null; this.ready = null; this.files = {}; this.handlers.clear();
+      if (reason) pending.forEach(h => h({ kind: 'error', message: reason }));
+    },
+    call(msg, onEvent) {
+      const id = ++this.seq;
+      return new Promise((resolve, reject) => {
+        this.handlers.set(id, d => {
+          if (d.kind === 'error') { this.handlers.delete(id); reject(new Error(d.message)); }
+          else if (d.kind === 'done' || d.kind === 'ready') { this.handlers.delete(id); resolve(); }
+          else onEvent?.(d);
+        });
+        this.worker().postMessage({ id, ...msg });
+      });
+    },
+    load() {
+      if (!this.ready) { this.ready = this.call({ type: 'load', cfg: asrCfg() }); this.ready.catch(() => { this.ready = null; }); }
+      return this.ready;
+    },
+    run(chunks, onEvent) { return this.call({ type: 'run', cfg: asrCfg(), chunks, language: settings.asrLang || null }, onEvent); },
+    async unload() {
+      if (!this.w) return;
+      if (this.ready) { try { await this.ready; } catch {} }
+      try { await Promise.race([this.call({ type: 'unload' }), sleep(2000)]); } catch {}
+      this.reset();
+    },
+  };
+
+  async function transcribe(audio) {
+    try { return await transcribeOnce(audio); }
+    catch (err) {
+      if (!/GPU_GARBAGE/.test(err.message) || forceCPU) throw err;
+      // This browser's GPU gives broken output: switch everything to the CPU for this session.
+      forceCPU = true;
+      await LLMS.unload().catch(() => {});
+      toast('GPU di browser ini menghasilkan teks rusak, beralih ke CPU (lebih lambat). Hasil terbaik: buka di Chrome/Edge.', 8000);
+      setSub('stt', 'GPU bermasalah, mengulang di CPU…');
+      $('#liveBox').innerHTML = '<span class="text-slate-500">Mengulang di CPU…</span>';
+      return transcribeOnce(audio);
+    }
+  }
+  async function transcribeOnce(audio) {
+    const pieces = segmentAudio(audio.pcm).filter(p => p.rms > 0.0015);
+    if (!pieces.length) return { transcript: [], paragraphs: [], secs: 0 };
+    const texts = new Array(pieces.length).fill('');
+    const liveHtml = () => { const t = texts.filter(Boolean).join('\n\n'); return t ? esc(t) : '<span class="text-slate-500">Mendengarkan…</span>'; };
+
+    ASR.onProgress = (L, T) => { if (stepState.stt === 'active') { setBar('stt', (L / T) * 100); setSub('stt', `Mengunduh ${asrName()} ${fmtMB(L)} / ${fmtMB(T)}`); } };
+    setSub('stt', 'Menyiapkan model di ' + (useTurbo() ? 'GPU' : 'CPU') + '…');
+    await useGPUFor('asr');
+    await ASR.load();
+    let t0 = performance.now();
+    await ASR.run(pieces.map(p => p.data), d => {
+      if (d.kind === 'running') {
+        t0 = performance.now();
+        setBar('stt', 3); setSub('stt', `Mendengarkan 1/${pieces.length} · ${useTurbo() ? 'GPU' : 'CPU'}`);
+        showLive('Transkrip langsung', liveHtml());
+      } else if (d.kind === 'chunk') {
+        if (d.degenerate && useTurbo()) { ASR.reset('GPU_GARBAGE'); return; }
+        texts[d.index] = cleanText(d.text, pieces[d.index].rms);
+        setBar('stt', ((d.index + 1) / pieces.length) * 100);
+        setSub('stt', d.index + 1 < pieces.length ? `Mendengarkan ${d.index + 2}/${pieces.length}` : 'Merapikan teks…');
+        showLive('Transkrip langsung', liveHtml());
+      }
+    });
+
+    // Safety net: Whisper sometimes skips a stretch of speech. If a piece has far fewer words than
+    // its talking time suggests, listen again in two shorter halves and keep the fuller result.
+    const suspects = pieces.map((p, i) => i).filter(i => pieces[i].voiced > 5 && countWords(texts[i]) < pieces[i].voiced * 1.1);
+    if (suspects.length) {
+      setSub('stt', 'Memeriksa ulang bagian yang terlewat…');
+      const halves = suspects.flatMap(i => splitPiece(audio.pcm, pieces[i]));
+      const again = new Array(halves.length).fill('');
+      await ASR.run(halves.map(h => h.data), d => { if (d.kind === 'chunk') again[d.index] = cleanText(d.text, halves[d.index].rms); });
+      suspects.forEach((i, k) => {
+        const joined = [again[2 * k], again[2 * k + 1]].filter(Boolean).join(' ');
+        if (countWords(joined) > countWords(texts[i]) * 1.15) { console.info('Recovered skipped speech in piece', i); texts[i] = joined; }
+      });
+    }
+    const transcript = pieces.flatMap((p, i) => (texts[i] ? toSegments(texts[i], p.start, p.end) : []));
+    const paragraphs = pieces.map((p, i) => ({ start: p.start, text: texts[i] })).filter(p => p.text);
+    return { transcript, paragraphs, secs: (performance.now() - t0) / 1000 };
+  }
+
+  /* ---------- 4. Rangkuman dengan Qwen (WebLLM, GPU) ---------- */
+  const LLM_BASE = `https://huggingface.co/mlc-ai/${LLM.id}/resolve/main/`;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function cacheAdd(cache, url) {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        // fetch + put is more reliable than cache.add() with Hugging Face's CDN redirects.
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        await cache.put(new Request(url), res);
+        return;
+      } catch (e) { console.warn('Retry', url.split('/').pop(), attempt, e?.message); if (attempt >= 8) throw new Error('Gagal mengunduh model rangkuman. Periksa koneksi lalu coba lagi.'); await sleep(800 * attempt); }
+    }
+  }
+  const LLMS = {
+    engine: null, worker: null, loading: null, prefetching: null, dl: 0, onProgress: null,
+    // Network only, no GPU memory: download every weight shard straight into WebLLM's own cache,
+    // so it can run while Whisper is still busy on the GPU.
+    prefetch() {
+      if (localModels) return Promise.resolve((this.dl = 1));
+      if (!this.prefetching) {
+        this.prefetching = (async () => {
+          const cache = await caches.open('webllm/model');
+          const jsonUrl = LLM_BASE + 'tensor-cache.json';
+          if (!(await cache.match(jsonUrl))) await cacheAdd(cache, jsonUrl);
+          const records = (await (await cache.match(jsonUrl)).json()).records;
+          const have = new Set((await cache.keys()).map(r => r.url));
+          let total = 0, got = 0; const todo = [];
+          records.forEach(r => { const u = new URL(r.dataPath, LLM_BASE).href; total += r.nbytes; if (have.has(u)) got += r.nbytes; else todo.push([u, r.nbytes]); });
+          const report = () => { this.dl = got / total; this.onProgress?.({ phase: 'download', progress: this.dl, got, total }); };
+          report();
+          let next = 0;
+          const lane = async () => { while (next < todo.length) { const [u, n] = todo[next++]; await cacheAdd(cache, u); got += n; report(); } };
+          await Promise.all([lane(), lane(), lane(), lane()]);
+          this.dl = 1;
+        })().catch(e => { this.prefetching = null; throw e; });
+      }
+      return this.prefetching;
+    },
+    load() {
+      if (this.engine) return Promise.resolve(this.engine);
+      if (!this.loading) {
+        this.loading = (async () => {
+          const [webllm] = await Promise.all([import(WEBLLM_URL), this.prefetch()]);
+          for (let attempt = 1; ; attempt++) {
+            const w = new Worker(workerSrc('#llmWorkerSrc'), { type: 'module' });
+            const appConfig = localModels ? {
+              cacheBackend: 'cache',
+              model_list: [{
+                model: `${BASE}models/${LLM.id}/resolve/main/`, model_id: LLM.id,
+                model_lib: `${BASE}models/libs/${LLM.lib}`,
+                vram_required_MB: 2245.44, low_resource_required: false,
+                overrides: { context_window_size: 4096, max_history_size: 1 },
+              }],
+            } : undefined;
+            try {
+              this.engine = await webllm.CreateWebWorkerMLCEngine(w, LLM.id, {
+                appConfig,
+                initProgressCallback: p => this.onProgress?.({ phase: 'gpu', progress: p.progress || 0 }),
+              });
+              this.worker = w;
+              return this.engine;
+            } catch (e) {
+              w.terminate();
+              if (attempt >= 3 || !/network|fetch|cache/i.test(String(e?.message || e))) throw e;
+              await sleep(1000 * attempt);
+            }
+          }
+        })().catch(e => { this.loading = null; throw e; });
+      }
+      return this.loading;
+    },
+    async unload() {
+      if (this.loading) { try { await this.loading; } catch {} }
+      if (!this.engine) return;
+      try { await this.engine.unload(); } catch {}
+      try { this.worker?.terminate(); } catch {}
+      this.engine = null; this.worker = null; this.loading = null;
+    },
+  };
+
+  // Whisper (±1.5 GB) and Qwen (±2.2 GB) together do not fit a 4 GB laptop GPU,
+  // so only one of them lives in GPU memory at a time. Swapping from the browser cache takes a few seconds.
+  let gpuOwner = null, gpuSwitch = Promise.resolve();
+  function useGPUFor(kind) {
+    if (!useTurbo()) return Promise.resolve();
+    gpuSwitch = gpuSwitch.then(async () => {
+      if (gpuOwner === kind) return;
+      if (kind === 'asr') await LLMS.unload(); else await ASR.unload();
+      gpuOwner = kind;
+    });
+    return gpuSwitch;
+  }
+
+  const NUM_WORDS = { satu: 1, dua: 2, tiga: 3, empat: 4, lima: 5, enam: 6, tujuh: 7, delapan: 8, sembilan: 9, sepuluh: 10, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+  const ORDINALS = ['pertama', 'kedua', 'ketiga', 'keempat', 'kelima', 'keenam', 'ketujuh', 'kedelapan', 'kesembilan', 'kesepuluh'];
+  // How many list items does the speaker announce? ("5 pertanyaan", "yang kelima", ...)
+  function expectedItems(text, caption) {
+    let n = 0;
+    const re = /\b(\d{1,2}|satu|dua|tiga|empat|lima|enam|tujuh|delapan|sembilan|sepuluh|three|four|five|six|seven|eight|nine|ten)\s+(?:\w+\s+)?(pertanyaan|tips?|cara|hal|alasan|langkah|kesalahan|fakta|trik|rekomendasi|poin|jenis|ciri|tanda|manfaat|kebiasaan|aplikasi|web(site)?s?|tools?|ide|rahasia|step|questions?|things|ways|reasons|mistakes)\b/gi;
+    for (const m of ((caption || '') + ' ' + text).matchAll(re)) { const v = +m[1] || NUM_WORDS[m[1].toLowerCase()] || 0; if (v >= 2 && v <= 12) n = Math.max(n, v); }
+    const low = text.toLowerCase();
+    ORDINALS.forEach((o, i) => { if (i >= 2 && new RegExp(`\\b(yang\\s+)?${o}\\b`).test(low)) n = Math.max(n, i + 1); });
+    return n;
+  }
+
+  // Find the speaker's numbered list in the transcript ("1. …", "Dua, …", "Yang ketiga …", "Nomor empat …")
+  // and cut it into items, so every item reaches the summary even if the model would skip one.
+  const CTA = /\b(komen|comment|follow|like|subscribe|share|simpan|save|link di bio|klik|cek bio|kolom komentar)\b/i;
+  function extractList(text) {
+    const words = Object.keys(NUM_WORDS).join('|'), ords = ORDINALS.join('|');
+    const re = new RegExp(`(^|[.!?]\\s+)((?:yang\\s+|nomor\\s+|no\\.?\\s*)?(\\d{1,2}|${words}|${ords})(?:[.):,]|\\s+(?=[a-z]))\\s*)`, 'gi');
+    const marks = [];
+    for (const m of text.matchAll(re)) {
+      const tok = m[3].toLowerCase();
+      const isOrd = ORDINALS.includes(tok);
+      const v = +tok || NUM_WORDS[tok] || ORDINALS.indexOf(tok) + 1;
+      // A bare cardinal word ("Dua …") only counts when followed by punctuation, so "Satu panah …" is not a list marker.
+      if (!isOrd && !/^\d/.test(tok) && !/[.):,]/.test(m[2])) continue;
+      if (v >= 1 && v <= 12) marks.push({ v, at: m.index + m[1].length, body: m.index + m[0].length });
+    }
+    // Longest run 1,2,3,… (or starting at 2 when "pertama" is implied) in order of appearance.
+    let best = [];
+    for (let i = 0; i < marks.length; i++) {
+      if (marks[i].v > 2) continue;
+      const run = [marks[i]];
+      for (let j = i + 1; j < marks.length; j++) if (marks[j].v === run[run.length - 1].v + 1) run.push(marks[j]);
+      if (run.length > best.length) best = run;
+    }
+    if (best.length < 3) return [];
+    const items = best.map((m, k) => text.slice(m.body, k + 1 < best.length ? best[k + 1].at : text.length).trim());
+    // The last item runs to the end of the video: keep it about as long as the others and drop call-to-action lines.
+    const avg = items.slice(0, -1).reduce((a, t) => a + t.length, 0) / Math.max(1, items.length - 1);
+    const lastSents = (items[items.length - 1].match(/[^.!?]+[.!?]*/g) || []).map(x => x.trim());
+    const kept = [];
+    for (const sent of lastSents) {
+      if (CTA.test(sent)) { if (kept.length > 1 && /\?$/.test(kept[kept.length - 1])) kept.pop(); break; } // "…berapa hari lagi? Tulis di komen."
+      if (kept.length && kept.join(' ').length > avg * 1.4) break;
+      kept.push(sent);
+    }
+    items[items.length - 1] = kept.join(' ') || lastSents[0] || '';
+    return items.map(t => cap(t.replace(/\s+/g, ' ').trim())).filter(Boolean);
+  }
+
+  function parseLLM(raw) {
+    raw = raw.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/\*\*|__|^#+\s*/gm, '');
+    const get = re => (raw.match(re) || [])[1]?.trim() || '';
+    const title = get(/JUDUL\s*:\s*(.+)/i).replace(/^["'“]+|["'”]+$/g, '');
+    const summary = get(/RINGKASAN\s*:\s*([\s\S]*?)(?:\n\s*POIN|\n\s*TOPIK|$)/i).replace(/\s*\n\s*/g, ' ');
+    const pointsBlock = get(/POIN[^\n:]*:\s*([\s\S]*?)(?:\n\s*TOPIK|$)/i);
+    const key_points = [];
+    pointsBlock.split('\n').forEach(l => {
+      const isItem = /^\s*(?:[-*•]|\d+[.)])\s+/.test(l);
+      const t = l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim();
+      if (!t) return;
+      if (!isItem && key_points.length) key_points[key_points.length - 1] += ' ' + t; // wrapped line
+      else if (t.length > 3) key_points.push(t.replace(/^(?:butir|poin)?\s*\d{1,2}\s*[.):]\s*/i, ''));
+    });
+    const topics = get(/TOPIK\s*:\s*(.+)/i).split(/[,#]/).map(t => t.trim().replace(/[.]$/, '')).filter(t => t && t.length < 40).slice(0, 6);
+    return { title, summary, key_points, topics };
+  }
+
+  function sysPrompt(lang) {
+    return `Kamu menulis rangkuman video TikTok dari transkrip ucapannya, dalam ${lang}.
+Gaya: natural dan mengalir seperti menceritakan isi video ke teman, langsung ke inti. Jangan membuka dengan "Video ini membahas".
+Aturan isi:
+1. Setia pada transkrip. Jangan menambah fakta, contoh, saran, atau tafsiran sendiri. Kalimat sederhana lebih baik daripada kalimat panjang yang mengarang. Pertahankan istilah dan singkatan asli pembicara (misalnya "sempro", "bab 2") apa adanya, jangan diterjemahkan atau ditebak artinya.
+2. Jangan ada yang terlewat. Kalau pembicara menyebut daftar ("5 pertanyaan", "pertama, kedua, ..."), SETIAP butir menjadi satu poin, urut, dan poin itu harus memuat penjelasan, syarat, atau contoh yang pembicara sebut untuk butir tersebut.
+3. Transkrip dibuat otomatis, jadi mungkin ada kata salah dengar. Perbaiki hanya ejaan yang jelas keliru.
+4. Abaikan ajakan follow/like/komen/simpan. Kalau ada promosi produk atau link, sebut singkat di kalimat terakhir ringkasan.`;
+  }
+  const formatSpec = n => `Jawab dengan format PERSIS ini, tanpa markdown, tanpa kalimat pembuka:
+JUDUL: <judul singkat sesuai isi>
+RINGKASAN: <satu paragraf 2-3 kalimat tentang konteks dan pesan utama video, jangan mengulang isi tiap butir>
+POIN PENTING:
+- <Label singkat>: <penjelasan pembicara dalam 1-2 kalimat>
+- <butir 2>
+- <dst.${n ? ` sampai butir ke-${n}` : ''}>
+TOPIK: <3-5 kata kunci, dipisah koma>`;
+
+  async function chat(engine, messages, onToken, maxTokens = 900) {
+    const req = { stream: true, temperature: 0.1, top_p: 0.9, repetition_penalty: 1.05, max_tokens: maxTokens, messages };
+    if (LLM.noThink) req.extra_body = { enable_thinking: false };
+    const stream = await engine.chat.completions.create(req);
+    let raw = '';
+    for await (const chunk of stream) { raw += chunk.choices?.[0]?.delta?.content || ''; onToken?.(raw); }
+    return raw;
+  }
+
+  async function aiSummary(r) {
+    let t = performance.now();
+    await useGPUFor('llm');
+    const engine = await LLMS.load();
+    console.info(`[tikscribe] LLM ready in ${secs(t)}`); t = performance.now();
+    const lang = settings.sumLang;
+    const caption = (r.meta?.title || '').replace(/https?:\/\/\S+/g, '').trim();
+    let text = fullText(r);
+    const list = extractList(text);
+    const expected = Math.max(list.length, list.length ? 0 : expectedItems(text, caption));
+    const onToken = raw => { setSub('sum', `Menulis… ${raw.length} karakter`); showLive('Qwen sedang menulis', esc(raw.replace(/<think>[\s\S]*?(<\/think>|$)/g, '')) + '<span class="caret"></span>'); };
+
+    // Long videos: take full notes per part first so nothing is dropped, then summarise the notes.
+    const LIMIT = 7500;
+    let material = text, materialLabel = 'Transkrip lengkap';
+    if (text.length > LIMIT) {
+      const parts = []; let buf = '';
+      (text.match(/[^.!?]+[.!?]*/g) || [text]).forEach(s => { if ((buf + s).length > 5500 && buf) { parts.push(buf); buf = ''; } buf += s; });
+      if (buf) parts.push(buf);
+      const notes = [];
+      for (let i = 0; i < parts.length; i++) {
+        setSub('sum', `Mencatat bagian ${i + 1}/${parts.length}…`);
+        notes.push(await chat(engine, [
+          { role: 'system', content: sysPrompt(lang) },
+          { role: 'user', content: `Ini bagian ${i + 1} dari ${parts.length} transkrip video.\n"""\n${parts[i]}\n"""\n\nTulis SEMUA informasi penting di bagian ini sebagai daftar poin (- ...), urut, lengkap dengan angka, nama, dan contoh yang disebut. Jangan ada butir daftar yang terlewat.` },
+        ], onToken, 700));
+      }
+      material = notes.join('\n'); materialLabel = 'Catatan lengkap dari seluruh bagian video';
+    }
+
+    const opener = t => (t.match(/^[^.!?]+[.!?]?/) || [t])[0].trim();
+    const listHint = list.length ? `\n\nCatatan: pembicara menyebut daftar ${list.length} butir, masing-masing diawali kalimat berikut:\n${list.map((t, i) => `${i + 1}) "${opener(t)}"`).join('\n')}\nPOIN PENTING harus berisi tepat ${list.length} poin, urut sesuai daftar itu. Tulis tiap poin dengan kata-katamu sendiri: label singkat, titik dua, lalu satu kalimat penjelasan dari transkrip.` : '';
+    const messages = [
+      { role: 'system', content: sysPrompt(lang) },
+      { role: 'user', content: (caption ? `Caption video (konteks saja, bisa berisi promosi): "${caption}"\n\n` : '') + `${materialLabel}:\n"""\n${material}\n"""${listHint}\n\n${formatSpec(expected)}` },
+    ];
+    let raw = await chat(engine, messages, onToken);
+    let out = parseLLM(raw);
+
+    // Self-check against the speaker's list: same number of points, one item per point, no call-to-action points.
+    const ORD_RE = /\b(pertama|kedua|ketiga|keempat|kelima|keenam|ketujuh|kedelapan|kesembilan|kesepuluh)\b/gi;
+    const stripOrd = t => t.replace(/^(?:(?:yang\s+)?(?:pertama|kedua|ketiga|keempat|kelima|keenam|ketujuh|kedelapan|kesembilan|kesepuluh|terakhir)\s*[,:]\s*)/i, '');
+    const clean = o => { o.key_points = o.key_points.filter(k => !CTA.test(k)).map(k => k.replace(/(:\s*)(?:pertama|kedua|ketiga|keempat|kelima|keenam|ketujuh|terakhir),\s*/i, '$1')).map(stripOrd); return o; };
+    const problems = o => {
+      const n = expected;
+      if (!n) return '';
+      if (o.key_points.length !== n) return `POIN PENTING kamu berisi ${o.key_points.length} poin, padahal harus tepat ${n} (satu poin untuk setiap butir yang disebut pembicara).`;
+      if (o.key_points.some(k => (k.match(ORD_RE) || []).length > 1)) return 'Ada poin yang menggabungkan dua butir. Setiap butir harus menjadi poin sendiri.';
+      return '';
+    };
+    out = clean(out);
+    let issue = problems(out);
+    if (issue) {
+      setSub('sum', 'Merapikan poin…');
+      const raw2 = await chat(engine, [...messages, { role: 'assistant', content: raw }, { role: 'user', content: `${issue} Ajakan komen/simpan/follow bukan poin. Tulis ulang SELURUH jawaban dengan format yang sama.` }], onToken);
+      const out2 = clean(parseLLM(raw2));
+      if (!problems(out2) || (list.length && Math.abs(out2.key_points.length - list.length) < Math.abs(out.key_points.length - list.length))) {
+        out = { ...out2, summary: out2.summary || out.summary, title: out2.title || out.title, topics: out2.topics.length ? out2.topics : out.topics };
+      }
+      issue = problems(out);
+    }
+    // Small models like to "explain" acronyms (often wrongly) and repeat call-to-actions: remove both.
+    const lowText = text.toLowerCase();
+    const tidy = t => t.replace(/\s*\(([^)]{3,60})\)/g, (m, inner) => (lowText.includes(inner.toLowerCase()) ? m : ''));
+    out.summary = (out.summary.match(/[^.!?]+[.!?]*/g) || [out.summary]).map(x => x.trim())
+      .filter((x, i) => i === 0 || !/\b(komen\w*|komentar|follow|subscribe|like|share|me?nyimpan|simpan)\b/i.test(x)).map(tidy)
+      // The list already appears as points: keep the paragraph about context, not a second copy of the list.
+      .filter((x, i) => !(out.key_points.length >= 3 && i > 0 && /^(pertama|kedua|ketiga|keempat|kelima|keenam|ketujuh|selanjutnya|terakhir|lalu|kemudian)\b/i.test(x)))
+      .slice(0, 4).join(' ');
+    out.key_points = out.key_points.map(tidy);
+    out.title = tidy(out.title);
+    if (!out.topics.length) out.topics = extractiveSummary(r.transcript, r.meta).topics;
+    // Last guarantee: if the points still do not line up with the speaker's list, show the speaker's own items.
+    if (list.length && issue) out.key_points = list;
+    console.info(`[tikscribe] LLM wrote in ${secs(t)}`);
+    if (!out.summary && !out.key_points.length) throw new Error('Qwen tidak menghasilkan teks.');
+    return out;
+  }
+
+  /* Fallback only when the device has no WebGPU: pick key sentences directly from the transcript. */
+  const STOP = new Set(('satu dua tiga empat lima enam tujuh delapan sembilan sepuluh pertama kedua ketiga keempat kelima yang dan di ke dari ini itu dengan untuk pada adalah dalam tidak akan juga atau karena jadi kalau kalo kita kamu aku saya gue gua lu lo dia mereka kami ada bisa sudah lagi aja saja ya iya ga gak nggak enggak engga udah gitu gini kayak kaya banget sih dong deh kan nya pun lah tuh nih bang kak guys oke ok terus trus tapi namun sangat lebih paling semua harus mau ingin pengen buat bikin cuma hanya seperti oleh sebagai bahwa agar supaya maka jika hal apa siapa kenapa mengapa bagaimana gimana dimana kapan mana sini sana situ sekarang nanti tadi hari orang punya biar emang memang belum masih pas waktu jangan yuk ayo halo hai teman temen kalian ' +
+    'the a an and or but of to in on at for with is are was were be been it its this that these those i you he she we they my your our their me him her them so if then than as by from not no do does did have has had just like really very can will would could should what when where who why how all any some one about up out get got go going gonna yeah um uh oh hmm okay there here into more also because which being').split(/\s+/));
+  const tokenize = s => s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(w => w.length > 2 && !STOP.has(w) && !/^\d+$/.test(w));
+  const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+  const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).replace(/\s+\S*$/, '') + '…' : s);
+  const captionInfo = caption => {
+    caption = (caption || '').trim();
+    return {
+      hashtags: [...new Set((caption.match(/#[\p{L}\p{N}_]+/gu) || []).map(h => h.slice(1).toLowerCase()))].filter(t => !/^(fyp|fy|fypage|foryou|foryoupage|viral|xyzbca|trending|tiktok)$/i.test(t)),
+      clean: ((caption.replace(/#[\p{L}\p{N}_]+/gu, '').replace(/https?:\/\/\S+/g, '').trim().match(/^[^.!?\n]+[.!?]?/) || [''])[0]).replace(/\s+/g, ' ').trim(),
+    };
+  };
+  function extractiveSummary(transcript, meta) {
+    const text = transcript.map(s => s.text).join(' ').replace(/\s+/g, ' ').trim();
+    const { hashtags, clean } = captionInfo(meta?.title);
+    if (!text) return { title: clip(clean || 'Video tanpa ucapan', 90), summary: '', key_points: [], topics: hashtags.slice(0, 6) };
+    let sents = transcript.map(s => s.text.trim()).filter(s => s.split(' ').length >= 3);
+    if (!sents.length) sents = [text];
+    const freq = new Map(); tokenize(text).forEach(w => freq.set(w, (freq.get(w) || 0) + 1));
+    const maxF = Math.max(1, ...freq.values());
+    const scored = sents.map((s, i) => {
+      const toks = tokenize(s);
+      let sc = toks.length ? toks.reduce((a, w) => a + freq.get(w) / maxF, 0) / Math.pow(toks.length, 0.55) : 0;
+      if (/\b(pertama|kedua|ketiga|keempat|kelima|nomor|first|second|third)\b/i.test(s)) sc *= 1.6;
+      return { s, i, score: sc };
+    });
+    const ranked = [...scored].sort((a, b) => b.score - a.score);
+    const picks = ranked.slice(0, Math.min(sents.length, Math.max(4, Math.ceil(sents.length * 0.4)))).sort((a, b) => a.i - b.i);
+    const keywords = [...freq.entries()].filter(([w, c]) => c >= 2 && w.length > 3).sort((a, b) => b[1] - a[1]).map(([w]) => w);
+    return {
+      title: clip(clean || cap(ranked[0].s), 90),
+      summary: picks.slice(0, 2).map(x => cap(x.s)).join(' '),
+      key_points: picks.slice(2).map(x => clip(cap(x.s), 240)),
+      topics: [...new Set([...hashtags, ...keywords])].slice(0, 6),
+    };
+  }
+
+  async function summarize(r) {
+    const words = countWords(r.transcript);
+    if (words < MIN_WORDS) return { ...extractiveSummary(r.transcript || [], r.meta), sumMode: '—', lowSpeech: true, words };
+    if (useTurbo()) {
+      try { return { ...(await aiSummary(r)), sumMode: LLM.name, lowSpeech: false, words }; }
+      catch (err) { console.warn(err); toast('Qwen gagal berjalan (' + (err.message || 'error') + '). Memakai rangkuman cepat.', 5000); }
+    }
+    return { ...extractiveSummary(r.transcript, r.meta), sumMode: 'Cepat (tanpa GPU)', lowSpeech: false, words };
+  }
+
+  /* ---------- Main flow ---------- */
+  function startModelLoads(needAsr = true) {
+    // Everything that can overlap does: Qwen downloads (network) while the video is fetched and Whisper runs on the GPU.
+    if (needAsr) useGPUFor('asr').then(() => ASR.load()).catch(() => {});
+    if (useTurbo()) {
+      LLMS.onProgress = p => {
+        if (stepState.sum !== 'wait' && stepState.sum !== 'active') return;
+        const pct = Math.round(p.progress * 100);
+        if (p.phase === 'download') {
+          if (pct < 100) setSub('sum', `Mengunduh ${LLM.name} ${pct}% (${fmtMB(p.got)} / ${fmtMB(p.total)})`);
+          else if (stepState.sum === 'wait') setSub('sum', `${LLM.name} siap di cache`);
+        } else if (stepState.sum === 'active') setSub('sum', `Memuat ${LLM.name} ke GPU ${pct}%`);
+        if (stepState.sum === 'active') setBar('sum', pct);
+      };
+      LLMS.prefetch().catch(e => console.warn('LLM prefetch', e));
+    }
+  }
+
+  async function runJob({ url, file }) {
+    if (busy) return;
+    busy = true; setBusy(true);
+    $('#result').classList.add('hidden');
+    initSteps();
+    await Promise.all([gpuReady, localReady]);
+    startModelLoads();
+    let step = 'info';
+    const T = performance.now();
+    try {
+      let meta, media;
+      if (file) {
+        setStep('info', lastMeta ? 'done' : 'skip', lastMeta ? 'Dari link sebelumnya' : 'File lokal');
+        meta = lastMeta || { title: file.name.replace(/\.[^.]+$/, ''), author: {}, stats: {}, local: true };
+        media = file;
+        step = 'audio'; setStep('audio', 'active', 'Membaca file…');
+      } else {
+        let t = performance.now();
+        setStep('info', 'active', 'Menghubungi server…');
+        meta = await fetchMeta(url); lastMeta = meta;
+        setStep('info', 'done', (meta.author.handle ? '@' + meta.author.handle + ' · ' : '') + secs(t));
+        renderVideoCard(meta);
+        step = 'audio'; setStep('audio', 'active', meta.isSlideshow ? 'Mengunduh audio slideshow…' : 'Mengunduh video…');
+        media = await downloadMedia(meta);
+      }
+      let t = performance.now();
+      setSub('audio', 'Mengekstrak suara…'); setBar('audio', 'indeterminate');
+      const audio = await decodeAudio(media);
+      setStep('audio', 'done', `${fmtTime(audio.duration)} audio`);
+
+      step = 'stt'; t = performance.now();
+      setStep('stt', 'active', 'Menyiapkan…');
+      const tr = await transcribe(audio);
+      const words = countWords(tr.transcript);
+      setStep('stt', words < MIN_WORDS ? 'warn' : 'done', `${words} kata · ${useTurbo() ? 'GPU' : 'CPU'} · ${secs(t)}`);
+
+      step = 'sum'; t = performance.now();
+      setStep('sum', 'active', useTurbo() && LLMS.dl < 1 ? `Mengunduh ${LLM.name} ${Math.round(LLMS.dl * 100)}%` : 'Merangkum…');
+      const base = { meta, transcript: tr.transcript, paragraphs: tr.paragraphs, asrModel: asrName(), date: Date.now() };
+      const sum = await summarize(base);
+      setStep('sum', sum.lowSpeech ? 'skip' : 'done', sum.lowSpeech ? 'Dilewati: ucapan terlalu sedikit' : `${sum.sumMode} · ${secs(t)}`);
+      clearInterval(timer);
+      $('#elapsed').textContent = 'Total ' + secs(T);
+      $('#liveWrap').classList.add('hidden');
+
+      current = { ...base, ...sum };
+      renderVideoCard(meta);
+      renderResult(current);
+      saveHistory(current);
+      window.__tikscribe = { done: true, result: current, totalSecs: (performance.now() - T) / 1000 };
+      setTimeout(() => $('#result').scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
+    } catch (err) {
+      console.error(err);
+      setStep(step, 'error');
+      showError(err, step === 'info' || step === 'audio');
+      window.__tikscribe = { done: true, error: String(err.message || err) };
+    } finally {
+      busy = false; setBusy(false);
+    }
+  }
+
+  function setBusy(on) {
+    $('#submitBtn').disabled = on;
+    $('#submitLabel').textContent = on ? 'Memproses…' : 'Transkrip Sekarang';
+  }
+
+  async function resummarize() {
+    if (!current || busy) return;
+    busy = true; setBusy(true);
+    initSteps();
+    ['info', 'audio', 'stt'].forEach(s => setStep(s, 'done', 'Sudah ada'));
+    setStep('sum', 'active', 'Merangkum ulang…');
+    startModelLoads(false);
+    $('#progress').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const t = performance.now();
+    try {
+      const sum = await summarize(current);
+      current = { ...current, ...sum };
+      setStep('sum', 'done', `${sum.sumMode} · ${secs(t)}`);
+      clearInterval(timer); $('#liveWrap').classList.add('hidden');
+      saveHistory(current); renderResult(current);
+      toast('Rangkuman diperbarui ✓');
+    } catch (err) { setStep('sum', 'error'); showError(err, false); }
+    finally { busy = false; setBusy(false); }
+  }
+
+  /* ---------- Rendering ---------- */
+  function renderVideoCard(m) {
+    const stat = (val, label) => `<div class="rounded-xl bg-white/[.03] px-2 py-2 text-center"><div class="text-sm font-bold text-white">${compact(val)}</div><div class="text-[10px] uppercase tracking-wider text-slate-500">${label}</div></div>`;
+    $('#videoCard').innerHTML = `
+      <div class="relative aspect-[9/12] max-h-[420px] w-full overflow-hidden bg-gradient-to-br from-cyan-brand/20 to-rose-brand/20">
+        ${m.cover ? `<img src="${esc(m.cover)}" alt="" referrerpolicy="no-referrer" class="h-full w-full object-cover" onerror="this.remove()">` : `<div class="grid h-full place-items-center text-slate-500"><svg class="h-12 w-12" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M15 10l4.5-2.6v9.2L15 14M4 6h11v12H4z"/></svg></div>`}
+        <div class="absolute inset-0 bg-gradient-to-t from-[#07070c] via-transparent to-transparent"></div>
+        ${m.duration ? `<span class="absolute right-3 top-3 rounded-md bg-black/60 px-2 py-0.5 font-mono text-xs text-white backdrop-blur">${fmtTime(m.duration)}</span>` : ''}
+        ${m.isSlideshow ? `<span class="absolute left-3 top-3 rounded-md bg-rose-brand/80 px-2 py-0.5 text-xs font-semibold text-white">Slideshow</span>` : ''}
+      </div>
+      <div class="space-y-4 p-5">
+        ${m.author?.handle ? `<div class="flex items-center gap-3">
+          ${m.author.avatar ? `<img src="${esc(m.author.avatar)}" alt="" referrerpolicy="no-referrer" class="h-10 w-10 rounded-full border border-white/10 object-cover" onerror="this.style.display='none'">` : ''}
+          <div class="min-w-0"><div class="truncate font-bold text-white">${esc(m.author.name)}</div><div class="truncate text-xs text-slate-500">@${esc(m.author.handle)}</div></div>
+        </div>` : ''}
+        ${m.title ? `<p class="line-clamp-4 text-sm text-slate-300">${esc(m.title)}</p>` : ''}
+        ${m.stats && m.stats.plays != null ? `<div class="grid grid-cols-4 gap-1.5">${stat(m.stats.plays, 'Tonton')}${stat(m.stats.likes, 'Suka')}${stat(m.stats.comments, 'Komen')}${stat(m.stats.shares, 'Bagi')}</div>` : ''}
+        ${m.url ? `<a href="${esc(m.url)}" target="_blank" rel="noopener" class="flex items-center justify-center gap-1.5 rounded-xl border border-white/10 py-2.5 text-xs font-semibold text-slate-300 transition hover:bg-white/5 hover:text-white">Buka di TikTok <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14 4h6v6m0-6L10 14M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>` : ''}
+      </div>`;
+  }
+
+  function renderResult(r) {
+    const words = r.words ?? countWords(r.transcript);
+    const low = r.lowSpeech || words < MIN_WORDS;
+    const pts = (r.key_points || []).map((p, i) => `
+      <li class="flex gap-3 rounded-xl border border-white/5 bg-white/[.02] p-3.5">
+        <span class="grid h-6 w-6 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-cyan-brand to-rose-brand font-mono text-[11px] font-bold text-white">${i + 1}</span>
+        <span class="text-[15px] leading-relaxed text-slate-200">${(m => (m ? `<b class="font-semibold text-white">${esc(m[1])}:</b> ${esc(m[2])}` : esc(p)))(p.match(/^([^:]{2,45}):\s+(.+)$/s))}</span>
+      </li>`).join('');
+    const tags = (r.topics || []).map(t => `<span class="rounded-full border border-cyan-brand/20 bg-cyan-brand/10 px-3 py-1 text-xs font-semibold text-cyan-brand">#${esc(String(t).replace(/^#/, '').replace(/\s+/g, ''))}</span>`).join('');
+
+    $('#panel-summary').innerHTML = `
+      <div class="mb-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        ${low ? '' : `<span class="rounded-md bg-white/5 px-2 py-0.5 font-semibold text-slate-300">${esc(r.sumMode || '')}</span>`}
+        <span>${esc(r.asrModel || '')}</span><span>·</span><span>${words} kata</span>
+      </div>
+      <h3 class="mt-2 text-2xl font-extrabold leading-tight text-white">${esc(r.title || 'Rangkuman')}</h3>
+      ${low ? `
+        <div class="mt-5 rounded-2xl border border-amber-300/30 bg-amber-300/[.07] p-5 text-sm text-amber-100/80">
+          <p class="font-bold text-amber-100">Hampir tidak ada ucapan di video ini${words ? ` (hanya ${words} kata)` : ''}</p>
+          <p class="mt-1">Supaya tidak mengarang, rangkuman tidak dibuat. Biasanya ini video musik/tanpa suara, atau bahasa di menu <b>Bahasa</b> belum sesuai.</p>
+        </div>` : `
+        <p class="mt-4 text-[15px] leading-relaxed text-slate-300">${esc(r.summary || '')}</p>
+        ${pts ? `<h4 class="mb-3 mt-8 text-xs font-bold uppercase tracking-wider text-slate-400">Poin penting</h4><ul class="space-y-2">${pts}</ul>` : ''}
+        ${tags ? `<div class="mt-6 flex flex-wrap gap-2">${tags}</div>` : ''}
+        <div class="mt-8 flex flex-wrap items-center gap-3 border-t border-white/5 pt-5">
+          <button id="resumBtn" class="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-white/10">↻ Rangkum ulang</button>
+          <button id="toTranscript" class="text-xs font-semibold text-cyan-brand underline-offset-4 hover:underline">Lihat transkrip lengkap →</button>
+        </div>`}`;
+    $('#resumBtn')?.addEventListener('click', resummarize);
+    $('#toTranscript')?.addEventListener('click', () => switchTab('transcript'));
+    $('#searchTr').value = '';
+    renderTranscript(r, '');
+    switchTab('summary');
+    $('#result').classList.remove('hidden');
+  }
+
+  function paragraphsOf(r) {
+    if (r.paragraphs?.length) return r.paragraphs;
+    // Older history entries: group sentences into readable paragraphs.
+    const out = [];
+    (r.transcript || []).forEach(s => {
+      const last = out[out.length - 1];
+      if (last && last.text.length < 350) last.text += ' ' + s.text; else out.push({ start: s.start, text: s.text });
+    });
+    return out;
+  }
+
+  function renderTranscript(r, q) {
+    const list = $('#transcriptList');
+    $$('.view-btn').forEach(b => { b.className = 'view-btn rounded-lg px-3 py-1.5 transition ' + (b.dataset.view === view ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'); });
+    const rows = view === 'para' ? paragraphsOf(r) : (r.transcript || []);
+    if (!rows.length) {
+      list.innerHTML = `<div class="py-10 text-center"><p class="text-sm text-slate-400">Tidak ada ucapan yang tertangkap.</p><p class="mt-1 text-xs text-slate-500">Pastikan bahasa video sudah benar di menu Bahasa.</p></div>`;
+      $('#matchCount').textContent = ''; return;
+    }
+    const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    let hits = 0;
+    const html = rows.map(s => {
+      let t = esc(s.text);
+      if (q) {
+        const m = s.text.match(new RegExp(reEsc(q), 'gi')); if (!m) return '';
+        hits += m.length; t = t.replace(new RegExp(reEsc(esc(q)), 'gi'), x => `<mark>${x}</mark>`);
+      }
+      return view === 'para'
+        ? `<div class="group flex gap-4 py-3"><span class="mt-1 h-fit shrink-0 rounded-md bg-white/5 px-2 py-0.5 font-mono text-[11px] text-cyan-brand">${fmtTime(s.start)}</span><p class="text-[15px] leading-[1.8] text-slate-200">${t}</p></div>`
+        : `<div class="flex gap-4 rounded-xl px-3 py-2.5 transition hover:bg-white/[.03]"><span class="mt-0.5 h-fit shrink-0 rounded-md bg-white/5 px-2 py-0.5 font-mono text-[11px] text-cyan-brand">${fmtTime(s.start)}</span><p class="text-[15px] leading-relaxed text-slate-200">${t}</p></div>`;
+    }).join('');
+    list.innerHTML = html ? `<div class="${view === 'para' ? 'divide-y divide-white/5' : 'space-y-1'}">${html}</div>` : '<p class="py-10 text-center text-sm text-slate-500">Tidak ada hasil.</p>';
+    $('#matchCount').textContent = q ? `${hits} cocok` : `${countWords(r.transcript)} kata`;
+  }
+
+  function switchTab(name) {
+    $$('.tab-btn').forEach(b => {
+      const on = b.dataset.tab === name;
+      b.className = 'tab-btn rounded-t-lg border-b-2 px-4 py-2.5 text-sm font-semibold transition ' + (on ? 'border-rose-brand text-white' : 'border-transparent text-slate-500 hover:text-slate-300');
+    });
+    $$('.tab-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'panel-' + name));
+    switchTab.active = name;
+  }
+
+  function asText(r, which = 'all') {
+    const sum = [`# ${r.title || 'Rangkuman'}`, '', r.lowSpeech ? '(Rangkuman tidak dibuat: hampir tidak ada ucapan)' : r.summary || '', '',
+      ...(!r.lowSpeech && r.key_points?.length ? ['Poin penting:', ...r.key_points.map((p, i) => `${i + 1}. ${p}`), ''] : []),
+      ...(r.topics?.length ? [r.topics.map(t => '#' + String(t).replace(/^#/, '').replace(/\s+/g, '')).join(' '), ''] : [])].join('\n');
+    const tr = paragraphsOf(r).map(p => `[${fmtTime(p.start)}] ${p.text}`).join('\n\n');
+    if (which === 'summary') return sum.trim();
+    if (which === 'transcript') return tr;
+    const head = r.meta?.url ? `Sumber: ${r.meta.url}${r.meta.author?.handle ? ' (@' + r.meta.author.handle + ')' : ''}\n\n` : '';
+    return `${head}${sum}\n---\nTRANSKRIP LENGKAP\n\n${tr}\n`;
+  }
+
+  /* ---------- History ---------- */
+  function saveHistory(r) {
+    const h = store.get(LS_HISTORY, []).filter(x => !(x.meta?.id && x.meta.id === r.meta?.id) && x.date !== r.date);
+    h.unshift(r); store.set(LS_HISTORY, h.slice(0, 12)); renderHistory();
+  }
+  function renderHistory() {
+    const h = store.get(LS_HISTORY, []);
+    $('#historySection').classList.toggle('hidden', !h.length);
+    $('#historyGrid').innerHTML = h.map((r, i) => `
+      <button data-h="${i}" class="glass flex gap-3 rounded-2xl p-3 text-left transition hover:-translate-y-0.5 hover:bg-white/[.06]">
+        <div class="h-20 w-16 shrink-0 overflow-hidden rounded-lg bg-gradient-to-br from-cyan-brand/20 to-rose-brand/20">
+          ${r.meta?.cover ? `<img src="${esc(r.meta.cover)}" alt="" referrerpolicy="no-referrer" class="h-full w-full object-cover" onerror="this.remove()">` : ''}
+        </div>
+        <div class="min-w-0">
+          <div class="line-clamp-2 text-sm font-bold text-white">${esc(r.title || r.meta?.title || 'Tanpa judul')}</div>
+          <div class="mt-1 truncate text-xs text-slate-500">${r.meta?.author?.handle ? '@' + esc(r.meta.author.handle) + ' · ' : ''}${new Date(r.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}</div>
+          <div class="mt-1.5 line-clamp-2 text-xs text-slate-400">${esc(r.lowSpeech ? 'Hampir tidak ada ucapan' : r.summary || '')}</div>
+        </div>
+      </button>`).join('');
+  }
+
+  /* ---------- Settings (bahasa saja) ---------- */
+  function openSettings() {
+    $('#asrLang').value = settings.asrLang; $('#sumLang').value = settings.sumLang; $('#proxy').value = settings.proxy;
+    const m = $('#settingsModal'); m.classList.remove('hidden'); m.classList.add('flex');
+  }
+  function closeSettings() { const m = $('#settingsModal'); m.classList.add('hidden'); m.classList.remove('flex'); }
+
+  /* ---------- Events ---------- */
+  $('#form').addEventListener('submit', e => {
+    e.preventDefault();
+    const url = $('#url').value.trim();
+    if (!/tiktok\.com\//i.test(url)) { toast('Masukkan link TikTok yang valid'); $('#url').focus(); return; }
+    runJob({ url });
+  });
+  if (navigator.clipboard?.readText) {
+    $('#pasteBtn').classList.remove('hidden');
+    $('#pasteBtn').addEventListener('click', async () => { try { $('#url').value = (await navigator.clipboard.readText()).trim(); $('#url').focus(); } catch { toast('Izin clipboard ditolak, tempel manual (Ctrl+V)'); } });
+  }
+  $('#uploadLink').addEventListener('click', () => { lastMeta = null; $('#fileInput').click(); });
+  $('#fileInput').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) runJob({ file: f }); });
+
+  $$('.tab-btn').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+  $$('.view-btn').forEach(b => b.addEventListener('click', () => { view = b.dataset.view; if (current) renderTranscript(current, $('#searchTr').value.trim()); }));
+  $('#searchTr').addEventListener('input', e => current && renderTranscript(current, e.target.value.trim()));
+  $('#copyBtn').addEventListener('click', async () => {
+    if (!current) return;
+    try { await navigator.clipboard.writeText(asText(current, switchTab.active)); toast(switchTab.active === 'summary' ? 'Rangkuman disalin ✓' : 'Transkrip disalin ✓'); }
+    catch { toast('Gagal menyalin'); }
+  });
+  $('#downloadBtn').addEventListener('click', () => {
+    if (!current) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([asText(current)], { type: 'text/plain;charset=utf-8' }));
+    a.download = `tiktok-${current.meta?.id || Date.now()}.txt`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  $('#historyGrid').addEventListener('click', e => {
+    const b = e.target.closest('[data-h]'); if (!b) return;
+    current = store.get(LS_HISTORY, [])[+b.dataset.h]; if (!current) return;
+    $('#progress').classList.add('hidden');
+    renderVideoCard(current.meta || {}); renderResult(current);
+    $('#result').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  $('#clearHistory').addEventListener('click', () => { store.set(LS_HISTORY, []); renderHistory(); toast('Riwayat dihapus'); });
+
+  $('#openSettings').addEventListener('click', openSettings);
+  $$('[data-close]').forEach(b => b.addEventListener('click', closeSettings));
+  $('#settingsModal').addEventListener('click', e => { if (e.target.id === 'settingsModal') closeSettings(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSettings(); });
+  $('#saveSettings').addEventListener('click', () => {
+    settings.asrLang = $('#asrLang').value; settings.sumLang = $('#sumLang').value; settings.proxy = $('#proxy').value.trim();
+    store.set(LS_SETTINGS, settings); closeSettings(); toast('Pengaturan disimpan ✓');
+  });
+
+  /* ---------- Init ---------- */
+  (async () => {
+    await gpuReady;
+    const b = $('#deviceBadge');
+    b.innerHTML = gpu.ok
+      ? `<span class="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400"></span><span class="truncate">GPU · ${esc(gpu.name)}</span>`
+      : '<span class="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"></span> Tanpa WebGPU · mode CPU';
+    b.classList.remove('hidden'); b.classList.add('sm:inline-flex');
+    await localReady;
+    if (location.protocol === 'file:') {
+      $('#firstRunNote').innerHTML = '<span class="text-amber-300">File ini harus dibuka lewat <b>Jalankan TikScribe.bat</b> (atau server lokal), bukan klik dua kali. Browser memblokir model AI dari file://.</span>';
+      return;
+    }
+    if (gpu.reason === 'firefox') {
+      $('#firstRunNote').innerHTML = `<span class="text-amber-300">Firefox belum stabil menjalankan AI di GPU (hasil transkrip bisa rusak), jadi di sini memakai CPU yang lebih lambat dan kurang akurat. Untuk hasil terbaik buka <b>${esc(location.href)}</b> di Chrome atau Edge.</span>`;
+      return;
+    }
+    $('#firstRunNote').textContent = !useTurbo()
+      ? 'Browser ini belum mendukung WebGPU fp16, jadi transkripsi memakai CPU (lebih lambat) dan rangkuman memakai mode cepat. Pakai Chrome/Edge terbaru di laptop/PC untuk hasil terbaik.'
+      : localModels
+        ? `Model AI dibaca langsung dari folder models (${ASR_GPU.name} + ${LLM.name}). Tidak ada unduhan.`
+        : `Pemakaian pertama mengunduh ${ASR_GPU.name} (${ASR_GPU.size}) dan ${LLM.name} (${LLM.size}) sekali saja, lalu tersimpan di cache browser.`;
+    // Models are on disk: put Whisper on the GPU right away so the first click starts transcribing immediately.
+    if (useTurbo() && localModels) setTimeout(() => { if (!busy) useGPUFor('asr').then(() => ASR.load()).catch(() => {}); }, 600);
+  })();
+  renderHistory(); switchTab('summary');
+})();
+</script>
+</body>
+</html>
